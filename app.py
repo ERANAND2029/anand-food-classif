@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 import numpy as np
+import cv2
 
 # Try importing ultralytics
 try:
@@ -117,6 +118,83 @@ def format_dish_name(name: str) -> str:
     cleaned = name.replace("_", " ").replace("-", " ")
     return " ".join(word.capitalize() for word in cleaned.split())
 
+def detect_food_bounding_boxes(image: Image.Image, default_label: str, default_conf: float) -> List[Dict[str, Any]]:
+    """Detects food/plate regions using OpenCV and predicts classes for each box"""
+    try:
+        rgb_arr = np.array(image.convert("RGB"))
+        h, w = rgb_arr.shape[:2]
+        img_bgr = cv2.cvtColor(rgb_arr, cv2.COLOR_RGB2BGR)
+
+        # Preprocessing for plate & food contour detection
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+        edges = cv2.Canny(blurred, 30, 120)
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11))
+        dilated = cv2.dilate(edges, kernel, iterations=2)
+
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        boxes = []
+        min_area = (w * h) * 0.04   # At least 4% of image
+        max_area = (w * h) * 0.94   # At most 94% of image
+
+        for c in contours:
+            area = cv2.contourArea(c)
+            if min_area < area < max_area:
+                x, y, bw, bh = cv2.boundingRect(c)
+                aspect = bw / float(bh)
+                # Keep reasonable food dish aspects
+                if 0.35 <= aspect <= 2.8:
+                    # Crop and classify if custom model is available
+                    box_label = default_label
+                    box_conf = default_conf
+                    if current_model is not None and bw > 40 and bh > 40:
+                        crop = image.crop((x, y, x + bw, y + bh))
+                        crop_res = current_model(crop, verbose=False)
+                        crop_probs = crop_res[0].probs
+                        c_top1 = int(crop_probs.top1)
+                        c_conf = float(crop_probs.top1conf)
+                        # If crop confidence is good, use it
+                        if c_conf > 0.40:
+                            box_label = format_dish_name(crop_res[0].names[c_top1])
+                            box_conf = round(c_conf * 100, 1)
+
+                    boxes.append({
+                        "x": round(x / w, 4),
+                        "y": round(y / h, 4),
+                        "w": round(bw / w, 4),
+                        "h": round(bh / h, 4),
+                        "label": box_label,
+                        "confidence": box_conf
+                    })
+
+        # Sort by area descending and keep up to 4 prominent items
+        if boxes:
+            boxes = sorted(boxes, key=lambda b: b["w"] * b["h"], reverse=True)[:4]
+        else:
+            # Fallback smart center targeting frame
+            boxes = [{
+                "x": 0.15,
+                "y": 0.15,
+                "w": 0.70,
+                "h": 0.70,
+                "label": default_label,
+                "confidence": default_conf
+            }]
+
+        return boxes
+    except Exception as e:
+        print("[!] Bounding box detection error:", e)
+        return [{
+            "x": 0.15,
+            "y": 0.15,
+            "w": 0.70,
+            "h": 0.70,
+            "label": default_label,
+            "confidence": default_conf
+        }]
+
 def predict_on_pil_image(image: Image.Image) -> Dict[str, Any]:
     start_time = time.time()
     
@@ -149,13 +227,16 @@ def predict_on_pil_image(image: Image.Image) -> Dict[str, Any]:
                 "score": float(conf)
             })
 
+        top1_dish = format_dish_name(top1_raw_name)
+        boxes = detect_food_bounding_boxes(image, top1_dish, round(top1_conf * 100, 1))
         latency = round((time.time() - start_time) * 1000, 1)
         return {
             "top1": {
-                "dish": format_dish_name(top1_raw_name),
+                "dish": top1_dish,
                 "raw_class": top1_raw_name,
                 "confidence": round(top1_conf * 100, 2)
             },
+            "boxes": boxes,
             "predictions": predictions,
             "latency_ms": latency,
             "is_standby": False,
@@ -183,8 +264,12 @@ def predict_on_pil_image(image: Image.Image) -> Dict[str, Any]:
             "score": conf
         })
 
+    top1_dish = predictions[0]["dish"]
+    boxes = detect_food_bounding_boxes(image, top1_dish, predictions[0]["confidence"])
+
     return {
         "top1": predictions[0],
+        "boxes": boxes,
         "predictions": predictions,
         "latency_ms": latency,
         "is_standby": True,

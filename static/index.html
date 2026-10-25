@@ -106,8 +106,11 @@
 
               <!-- Image Preview Container -->
               <div id="preview-container" class="hidden relative max-h-[380px] flex items-center justify-center overflow-hidden rounded-lg bg-black/40">
-                <img id="image-preview" src="" alt="Food Preview" class="max-h-[360px] w-auto object-contain rounded-lg">
-                <button id="clear-btn" type="button" onclick="clearPhoto(event)" class="absolute top-2 right-2 p-1.5 rounded-full bg-slate-900/80 hover:bg-red-500/80 text-white transition backdrop-blur border border-white/10" title="Remove image">
+                <div class="relative inline-block max-h-[360px]">
+                  <img id="image-preview" src="" alt="Food Preview" class="max-h-[360px] w-auto object-contain rounded-lg block">
+                  <canvas id="photo-box-canvas" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
+                </div>
+                <button id="clear-btn" type="button" onclick="clearPhoto(event)" class="absolute top-2 right-2 p-1.5 rounded-full bg-slate-900/80 hover:bg-red-500/80 text-white transition backdrop-blur border border-white/10 z-20" title="Remove image">
                   <i data-lucide="x" class="w-4 h-4"></i>
                 </button>
               </div>
@@ -238,6 +241,7 @@
 
               <!-- Video element -->
               <video id="webcam-video" autoplay playsinline muted class="hidden w-full h-full object-cover"></video>
+              <canvas id="live-box-canvas" class="hidden absolute inset-0 w-full h-full pointer-events-none z-10"></canvas>
               <canvas id="capture-canvas" class="hidden"></canvas>
 
               <!-- Live HUD Overlay Banner over Video -->

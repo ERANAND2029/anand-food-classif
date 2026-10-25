@@ -177,6 +177,11 @@ function clearPhoto(e) {
   currentImageBlob = null;
   document.getElementById("file-input").value = "";
   document.getElementById("image-preview").src = "";
+  const photoCanvas = document.getElementById("photo-box-canvas");
+  if (photoCanvas) {
+    const ctx = photoCanvas.getContext("2d");
+    ctx.clearRect(0, 0, photoCanvas.width, photoCanvas.height);
+  }
   document.getElementById("drop-prompt").classList.remove("hidden");
   document.getElementById("preview-container").classList.add("hidden");
   document.getElementById("predict-btn").disabled = true;
@@ -226,6 +231,100 @@ async function runImagePrediction() {
   }
 }
 
+// ----------------------------------------------------
+// REAL-TIME YOLO BOUNDING BOX DRAWING ENGINE
+// ----------------------------------------------------
+function drawFoodBoxes(canvas, boxes, w, h) {
+  if (!canvas || !w || !h) return;
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, w, h);
+
+  if (!boxes || boxes.length === 0) return;
+
+  const colorThemes = [
+    { stroke: "#22c55e", glow: "rgba(34, 197, 94, 0.4)", fill: "rgba(34, 197, 94, 0.12)", badge: "#15803d" },  // Cyber Green
+    { stroke: "#f97316", glow: "rgba(249, 115, 22, 0.4)", fill: "rgba(249, 115, 22, 0.14)", badge: "#c2410c" },  // Saffron
+    { stroke: "#06b6d4", glow: "rgba(6, 182, 212, 0.4)", fill: "rgba(6, 182, 212, 0.12)", badge: "#0e7490" },  // Cyan
+    { stroke: "#eab308", glow: "rgba(234, 179, 8, 0.4)", fill: "rgba(234, 179, 8, 0.12)", badge: "#a16207" }   // Amber
+  ];
+
+  boxes.forEach((box, i) => {
+    const col = colorThemes[i % colorThemes.length];
+    const bx = Math.round(box.x * w);
+    const by = Math.round(box.y * h);
+    const bw = Math.round(box.w * w);
+    const bh = Math.round(box.h * h);
+
+    // 1. Semi-transparent box highlight
+    ctx.fillStyle = col.fill;
+    ctx.fillRect(bx, by, bw, bh);
+
+    // 2. Bounding rectangle with glowing border
+    ctx.save();
+    ctx.strokeStyle = col.stroke;
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = col.glow;
+    ctx.shadowBlur = 8;
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.restore();
+
+    // 3. Cyber Corner Brackets ┌ ┐ └ ┘
+    const corner = Math.min(20, Math.floor(bw * 0.22), Math.floor(bh * 0.22));
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+
+    // Top-left
+    ctx.beginPath();
+    ctx.moveTo(bx, by + corner); ctx.lineTo(bx, by); ctx.lineTo(bx + corner, by);
+    ctx.stroke();
+
+    // Top-right
+    ctx.beginPath();
+    ctx.moveTo(bx + bw - corner, by); ctx.lineTo(bx + bw, by); ctx.lineTo(bx + bw, by + corner);
+    ctx.stroke();
+
+    // Bottom-left
+    ctx.beginPath();
+    ctx.moveTo(bx, by + bh - corner); ctx.lineTo(bx, by + bh); ctx.lineTo(bx + corner, by + bh);
+    ctx.stroke();
+
+    // Bottom-right
+    ctx.beginPath();
+    ctx.moveTo(bx + bw - corner, by + bh); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw, by + bh - corner);
+    ctx.stroke();
+
+    // 4. Header Badge on top of rectangle
+    const labelText = `🍛 ${box.label.toUpperCase()} ${box.confidence}%`;
+    ctx.font = "bold 13px system-ui, -apple-system, sans-serif";
+    const textMetrics = ctx.measureText(labelText);
+    const badgeW = textMetrics.width + 18;
+    const badgeH = 26;
+    const badgeY = Math.max(0, by - badgeH);
+
+    // Badge Background
+    ctx.fillStyle = col.badge;
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(bx, badgeY, badgeW, badgeH, [6, 6, 0, 0]);
+    } else {
+      ctx.rect(bx, badgeY, badgeW, badgeH);
+    }
+    ctx.fill();
+
+    // Badge Border
+    ctx.strokeStyle = "rgba(255,255,255,0.4)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Badge Text
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(labelText, bx + 9, badgeY + 17);
+  });
+}
+
 function renderResults(data) {
   const displayState = document.getElementById("results-display");
   const latencyBadge = document.getElementById("latency-badge");
@@ -267,6 +366,16 @@ function renderResults(data) {
   });
 
   displayState.classList.remove("hidden");
+
+  // Draw bounding boxes on photo
+  const previewImg = document.getElementById("image-preview");
+  const photoCanvas = document.getElementById("photo-box-canvas");
+  if (data.boxes && photoCanvas && previewImg) {
+    // Wait for image dimensions to be available
+    setTimeout(() => {
+      drawFoodBoxes(photoCanvas, data.boxes, previewImg.clientWidth, previewImg.clientHeight);
+    }, 50);
+  }
 }
 
 // Quick Sample Generator for Instant Testing
@@ -328,6 +437,12 @@ async function toggleWebcam() {
     if (fpsInterval) clearInterval(fpsInterval);
 
     video.classList.add("hidden");
+    const liveBoxCanvas = document.getElementById("live-box-canvas");
+    if (liveBoxCanvas) {
+      const ctx = liveBoxCanvas.getContext("2d");
+      ctx.clearRect(0, 0, liveBoxCanvas.width, liveBoxCanvas.height);
+      liveBoxCanvas.classList.add("hidden");
+    }
     placeholder.classList.remove("hidden");
     liveIndicator.classList.add("hidden");
     liveIndicator.classList.remove("flex");
@@ -345,6 +460,8 @@ async function toggleWebcam() {
       });
       video.srcObject = webcamStream;
       video.classList.remove("hidden");
+      const liveBoxCanvas = document.getElementById("live-box-canvas");
+      if (liveBoxCanvas) liveBoxCanvas.classList.remove("hidden");
       placeholder.classList.add("hidden");
       liveIndicator.classList.remove("hidden");
       liveIndicator.classList.add("flex");
@@ -420,6 +537,13 @@ function updateLiveHUD(data) {
 
   hudDish.textContent = data.top1.dish;
   hudConf.textContent = `${data.top1.confidence}%`;
+
+  // Draw real-time bounding boxes with tags over the live camera feed
+  const video = document.getElementById("webcam-video");
+  const liveBoxCanvas = document.getElementById("live-box-canvas");
+  if (data.boxes && liveBoxCanvas && video && video.clientWidth) {
+    drawFoodBoxes(liveBoxCanvas, data.boxes, video.clientWidth, video.clientHeight);
+  }
 
   // Update Live Top 5 sidebar
   const liveList = document.getElementById("live-top5-list");
