@@ -8,6 +8,11 @@ let lastFrameTime = performance.now();
 let frameCount = 0;
 let fpsInterval = null;
 
+// Multi-camera & External USB Camera Support
+let availableCameras = [];
+let currentCameraIndex = 0;
+let activeDeviceId = null;
+
 // Initialize Lucide icons
 document.addEventListener("DOMContentLoaded", () => {
   if (window.lucide) {
@@ -15,6 +20,13 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   checkModelStatus();
   setupEventListeners();
+  loadAvailableCameras();
+
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener("devicechange", () => {
+      loadAvailableCameras();
+    });
+  }
 });
 
 function switchTab(tabId) {
@@ -421,7 +433,112 @@ function loadSampleImage(dishType) {
 // ----------------------------------------------------
 // LIVE CAMERA / WEBCAM LOGIC
 // ----------------------------------------------------
-async function toggleWebcam() {
+// ----------------------------------------------------
+// MULTI-CAMERA & EXTERNAL WEBCAM DETECTOR
+// ----------------------------------------------------
+async function loadAvailableCameras() {
+  const select = document.getElementById("camera-select");
+  if (!select) return;
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    select.innerHTML = '<option value="">Camera API not supported</option>';
+    return;
+  }
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    availableCameras = devices.filter(d => d.kind === "videoinput");
+
+    select.innerHTML = "";
+
+    if (availableCameras.length === 0) {
+      select.innerHTML = '<option value="">No Camera Detected</option>';
+      return;
+    }
+
+    const savedId = localStorage.getItem("preferred_camera_id");
+
+    availableCameras.forEach((cam, idx) => {
+      const opt = document.createElement("option");
+      opt.value = cam.deviceId;
+      
+      let name = cam.label || `Camera ${idx + 1}`;
+      const lower = name.toLowerCase();
+      if (lower.includes("usb") || lower.includes("external") || lower.includes("webcam")) {
+        name = `📷 ${name} (USB/External)`;
+      } else if (lower.includes("integrated") || lower.includes("built-in") || lower.includes("internal")) {
+        name = `📷 ${name} (Laptop Built-in)`;
+      } else if (idx > 0) {
+        name = `📷 ${name} (Camera ${idx + 1})`;
+      } else {
+        name = `📷 ${name}`;
+      }
+      
+      opt.textContent = name;
+      if (savedId && cam.deviceId === savedId) {
+        opt.selected = true;
+        currentCameraIndex = idx;
+      }
+      select.appendChild(opt);
+    });
+
+    // If external USB webcam is detected and no saved preference yet, auto-select the USB webcam!
+    if (!savedId && availableCameras.length > 1) {
+      const externalIdx = availableCameras.findIndex(c => {
+        const l = (c.label || "").toLowerCase();
+        return l.includes("usb") || l.includes("external") || l.includes("webcam");
+      });
+      if (externalIdx >= 0) {
+        select.selectedIndex = externalIdx;
+        currentCameraIndex = externalIdx;
+      } else {
+        // Typically camera index 1 is external when internal is 0
+        select.selectedIndex = 1;
+        currentCameraIndex = 1;
+      }
+    }
+  } catch (err) {
+    console.warn("Error enumerating cameras:", err);
+  }
+}
+
+async function onCameraSelectChange() {
+  const select = document.getElementById("camera-select");
+  if (!select || !select.value) return;
+  const newId = select.value;
+  localStorage.setItem("preferred_camera_id", newId);
+  currentCameraIndex = availableCameras.findIndex(c => c.deviceId === newId);
+  
+  if (webcamStream) {
+    stopWebcam();
+    await startCameraWithFallback(newId);
+  }
+}
+
+async function switchCameraNext() {
+  if (availableCameras.length <= 1) {
+    await loadAvailableCameras();
+  }
+  if (availableCameras.length <= 1) {
+    alert("Ek hi camera detect hua hai. Agar bahar se USB webcam lagaya hai to check karein ki Windows use pehchan raha hai.");
+    return;
+  }
+
+  currentCameraIndex = (currentCameraIndex + 1) % availableCameras.length;
+  const nextCam = availableCameras[currentCameraIndex];
+  const select = document.getElementById("camera-select");
+  if (select && nextCam) {
+    select.value = nextCam.deviceId;
+    localStorage.setItem("preferred_camera_id", nextCam.deviceId);
+  }
+
+  if (webcamStream) {
+    stopWebcam();
+  }
+  await startCameraWithFallback(nextCam ? nextCam.deviceId : null);
+}
+
+function stopWebcam() {
   const video = document.getElementById("webcam-video");
   const placeholder = document.getElementById("camera-off-placeholder");
   const toggleBtn = document.getElementById("cam-toggle-btn");
@@ -430,62 +547,150 @@ async function toggleWebcam() {
   const snapBtn = document.getElementById("capture-single-btn");
 
   if (webcamStream) {
-    // Stop camera
     webcamStream.getTracks().forEach(track => track.stop());
     webcamStream = null;
-    if (webcamInterval) clearInterval(webcamInterval);
-    if (fpsInterval) clearInterval(fpsInterval);
+  }
+  if (webcamInterval) clearInterval(webcamInterval);
+  if (fpsInterval) clearInterval(fpsInterval);
 
-    video.classList.add("hidden");
-    const liveBoxCanvas = document.getElementById("live-box-canvas");
-    if (liveBoxCanvas) {
-      const ctx = liveBoxCanvas.getContext("2d");
-      ctx.clearRect(0, 0, liveBoxCanvas.width, liveBoxCanvas.height);
-      liveBoxCanvas.classList.add("hidden");
-    }
-    placeholder.classList.remove("hidden");
+  if (video) video.classList.add("hidden");
+  const liveBoxCanvas = document.getElementById("live-box-canvas");
+  if (liveBoxCanvas) {
+    const ctx = liveBoxCanvas.getContext("2d");
+    ctx.clearRect(0, 0, liveBoxCanvas.width, liveBoxCanvas.height);
+    liveBoxCanvas.classList.add("hidden");
+  }
+  if (placeholder) placeholder.classList.remove("hidden");
+  if (liveIndicator) {
     liveIndicator.classList.add("hidden");
     liveIndicator.classList.remove("flex");
-    liveHud.classList.add("hidden");
-    snapBtn.disabled = true;
+  }
+  if (liveHud) liveHud.classList.add("hidden");
+  if (snapBtn) snapBtn.disabled = true;
 
+  if (toggleBtn) {
     toggleBtn.innerHTML = `<i data-lucide="power" class="w-3.5 h-3.5"></i> Start Camera`;
     toggleBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition flex items-center gap-1.5 shadow";
     if (window.lucide) lucide.createIcons();
-  } else {
-    // Start camera
-    try {
-      webcamStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "environment" }
-      });
-      video.srcObject = webcamStream;
-      video.classList.remove("hidden");
-      const liveBoxCanvas = document.getElementById("live-box-canvas");
-      if (liveBoxCanvas) liveBoxCanvas.classList.remove("hidden");
-      placeholder.classList.add("hidden");
-      liveIndicator.classList.remove("hidden");
-      liveIndicator.classList.add("flex");
-      liveHud.classList.remove("hidden");
-      snapBtn.disabled = false;
+  }
+}
 
-      toggleBtn.innerHTML = `<i data-lucide="square" class="w-3.5 h-3.5"></i> Stop Camera`;
-      toggleBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-red-600 hover:bg-red-500 text-white transition flex items-center gap-1.5 shadow";
-      if (window.lucide) lucide.createIcons();
+async function startCameraWithFallback(preferredDeviceId = null) {
+  const select = document.getElementById("camera-select");
+  const video = document.getElementById("webcam-video");
+  const placeholder = document.getElementById("camera-off-placeholder");
+  const toggleBtn = document.getElementById("cam-toggle-btn");
+  const liveIndicator = document.getElementById("live-indicator");
+  const snapBtn = document.getElementById("capture-single-btn");
 
-      // Start FPS counter
-      startFpsCounter();
+  // Enumerate cameras if not already populated
+  if (availableCameras.length === 0) {
+    await loadAvailableCameras();
+  }
 
-      // Start periodic prediction if auto-toggle checked
-      webcamInterval = setInterval(() => {
-        const autoCheck = document.getElementById("auto-predict-toggle");
-        if (autoCheck && autoCheck.checked) {
-          captureAndClassifyFrame();
-        }
-      }, 350); // ~3 FPS
+  // Determine candidate cameras to attempt in order
+  let candidates = [];
+  const targetId = preferredDeviceId || (select && select.value ? select.value : localStorage.getItem("preferred_camera_id"));
 
-    } catch (err) {
-      alert("Camera access denied ya camera nahi mila: " + err.message);
+  if (targetId) {
+    candidates.push(targetId);
+  }
+
+  // Add all other cameras as automatic fallback (so broken laptop cam won't block USB webcam!)
+  availableCameras.forEach(cam => {
+    if (cam.deviceId && !candidates.includes(cam.deviceId)) {
+      candidates.push(cam.deviceId);
     }
+  });
+
+  // If no specific camera candidate, add null
+  if (candidates.length === 0) {
+    candidates.push(null);
+  }
+
+  let stream = null;
+  let workingDeviceId = null;
+  let lastError = null;
+
+  for (const devId of candidates) {
+    try {
+      console.log("[Camera] Trying device:", devId || "default");
+      const constraints = devId 
+        ? { video: { deviceId: { exact: devId }, width: { ideal: 1280, min: 640 }, height: { ideal: 720, min: 480 } } }
+        : { video: { width: { ideal: 1280, min: 640 }, height: { ideal: 720, min: 480 } } };
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (strictErr) {
+        console.warn("[Camera] Strict constraints failed, trying basic video:", strictErr);
+        const fallbackConstraint = devId ? { video: { deviceId: { exact: devId } } } : { video: true };
+        stream = await navigator.mediaDevices.getUserMedia(fallbackConstraint);
+      }
+
+      if (stream && stream.getVideoTracks().length > 0) {
+        workingDeviceId = devId || stream.getVideoTracks()[0].getSettings().deviceId;
+        console.log("[Camera] Success on device:", workingDeviceId);
+        break;
+      }
+    } catch (err) {
+      console.warn(`[Camera] Device ${devId} failed (might be broken internal camera):`, err.name, err.message);
+      lastError = err;
+      // Auto-fallback to next candidate camera!
+    }
+  }
+
+  if (!stream) {
+    alert("Camera chalu nahi ho saka! Error: " + (lastError ? (lastError.name + ": " + lastError.message) : "No working camera found") + 
+          "\n\nKoshish karein:\n1. Check karein USB camera laptop me theek se laga ho.\n2. Browser address bar me Lock icon par 'Camera: Allow' hona chahiye.\n3. Koi aur app (Zoom, Teams, Camera app) camera to use nahi kar raha.");
+    return false;
+  }
+
+  if (webcamStream) {
+    webcamStream.getTracks().forEach(t => t.stop());
+  }
+
+  webcamStream = stream;
+  activeDeviceId = workingDeviceId;
+
+  // Re-enumerate with full labels now that permission is active
+  await loadAvailableCameras();
+
+  if (select && workingDeviceId) {
+    select.value = workingDeviceId;
+    localStorage.setItem("preferred_camera_id", workingDeviceId);
+  }
+
+  video.srcObject = webcamStream;
+  video.classList.remove("hidden");
+  const liveBoxCanvas = document.getElementById("live-box-canvas");
+  if (liveBoxCanvas) liveBoxCanvas.classList.remove("hidden");
+  placeholder.classList.add("hidden");
+  liveIndicator.classList.remove("hidden");
+  liveIndicator.classList.add("flex");
+  snapBtn.disabled = false;
+
+  toggleBtn.innerHTML = `<i data-lucide="square" class="w-3.5 h-3.5"></i> Stop Camera`;
+  toggleBtn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-red-600 hover:bg-red-500 text-white transition flex items-center gap-1.5 shadow";
+  if (window.lucide) lucide.createIcons();
+
+  startFpsCounter();
+
+  if (webcamInterval) clearInterval(webcamInterval);
+  webcamInterval = setInterval(() => {
+    const autoCheck = document.getElementById("auto-predict-toggle");
+    if (autoCheck && autoCheck.checked) {
+      captureAndClassifyFrame();
+    }
+  }, 350);
+
+  return true;
+}
+
+async function toggleWebcam() {
+  if (webcamStream) {
+    stopWebcam();
+  } else {
+    await startCameraWithFallback();
   }
 }
 

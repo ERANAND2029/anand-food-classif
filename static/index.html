@@ -211,15 +211,26 @@
         <div class="lg:col-span-8 space-y-4">
           <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl backdrop-blur relative">
             
-            <div class="flex items-center justify-between mb-4">
-              <h2 class="text-base font-semibold text-slate-200 flex items-center gap-2">
-                <i data-lucide="video" class="w-5 h-5 text-red-500"></i>
-                Live Camera Feed
-                <span id="live-indicator" class="hidden items-center gap-1.5 text-xs bg-red-500/20 text-red-400 border border-red-500/30 px-2 py-0.5 rounded-full">
-                  <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span> LIVE
-                </span>
-              </h2>
+            <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
               <div class="flex items-center gap-2">
+                <h2 class="text-base font-semibold text-slate-200 flex items-center gap-2">
+                  <i data-lucide="video" class="w-5 h-5 text-red-500"></i>
+                  Live Camera Feed
+                  <span id="live-indicator" class="hidden items-center gap-1.5 text-xs bg-red-500/20 text-red-400 border border-red-500/30 px-2 py-0.5 rounded-full">
+                    <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span> LIVE
+                  </span>
+                </h2>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <!-- Camera Select Dropdown -->
+                <div class="flex items-center gap-1">
+                  <select id="camera-select" onchange="onCameraSelectChange()" class="bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:ring-1 focus:ring-orange-500 focus:outline-none max-w-[210px] truncate cursor-pointer">
+                    <option value="">Detecting cameras...</option>
+                  </select>
+                  <button id="cam-switch-btn" type="button" onclick="switchCameraNext()" title="Switch to next camera (External / Built-in)" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition flex items-center gap-1">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                  </button>
+                </div>
                 <span id="live-fps" class="text-xs font-mono text-slate-400 bg-slate-800 px-2 py-1 rounded border border-slate-700/60">0 FPS</span>
                 <button id="cam-toggle-btn" onclick="toggleWebcam()" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition flex items-center gap-1.5 shadow">
                   <i data-lucide="power" class="w-3.5 h-3.5"></i> Start Camera
